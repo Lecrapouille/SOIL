@@ -1,5 +1,11 @@
-# SOIL makefile for linux (based on the AngelScript makefile)
+# SOIL makefile for linux and MacOS
 # Type 'make' then 'make install' to complete the installation of the library
+
+ifeq ($(OS),Windows_NT)
+ARCHI := Windows
+else
+ARCHI := $(shell sh -c 'uname -s 2>/dev/null || echo Unknown')
+endif
 
 # For 'make install' to work, set LOCAL according to your system configuration
 PREFIX = /usr/local
@@ -9,14 +15,21 @@ LIB = libSOIL.a
 INC = SOIL.h
 
 SRCDIR = src
-LIBDIR = lib
 INCDIR = src
-OBJDIR = obj
+LIBDIR = build
+OBJDIR = build
 
-CXX = gcc
-CXXFLAGS = -O2 -s -Wall
-DELETER = rm -f
-COPIER = cp
+ifeq ($(ARCHI),Darwin)
+CFLAGS = -fPIC -O2 -Wall -Wextra -DGL_SILENCE_DEPRECATION
+LDFLAGS += -framework OpenGL -framework CoreFoundation
+else
+CFLAGS = -fPIC -O2 -Wall -Wextra
+endif
+
+CFLAGS += -Iinclude/SOIL
+
+DELETER ?= rm -fr
+COPIER ?= cp
 
 SRCNAMES = \
   image_helper.c \
@@ -39,11 +52,10 @@ $(BIN): $(OBJ)
 
 $(OBJDIR)/%.o: $(SRCDIR)/%.c
 	mkdir -p $(OBJDIR)
-	$(CXX) $(CXXFLAGS) -o $@ -c $<
-
+	$(CC) $(CFLAGS) -o $@ -c $<
 
 clean:
-	$(DELETER) $(OBJ) $(BIN)
+	$(DELETER) $(OBJDIR)
 
 $(LOCAL)/lib/:
 	mkdir $(LOCAL)/lib
