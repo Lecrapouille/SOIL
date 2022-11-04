@@ -90,6 +90,53 @@ int query_DXT_capability( void );
 #define SOIL_RGBA_S3TC_DXT5		0x83F3
 typedef void (APIENTRY * P_SOIL_GLCOMPRESSEDTEXIMAGE2DPROC) (GLenum target, GLint level, GLenum internalformat, GLsizei width, GLsizei height, GLint border, GLsizei imageSize, const GLvoid * data);
 P_SOIL_GLCOMPRESSEDTEXIMAGE2DPROC soilGlCompressedTexImage2D = NULL;
+typedef const GLubyte* (APIENTRY * P_SOIL_GLGETSTRINGIPROC) (GLenum name, GLuint index);
+
+/**
+https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=727175
+"Most SOIL functions crash if OpenGL context is 3.2+ core profile. SOIL calls
+glGetString with a value that is no longer valid, and then sends the returned
+null pointer to strstr.
+This patch checks the OpenGL version at runtime, and uses a glGetString function
+that is appropriate and available. It doesn't crash if, for whatever reason,
+glGetString returns a null pointer."
+- Thanks to Brandon!
+**/
+static int SOIL_internal_has_OGL_capability(const char * cap)
+{
+	int i;
+	GLint num_ext;
+	const GLubyte * ext_string;
+	int major_version;
+
+	const GLubyte * ver_string = glGetString(GL_VERSION);
+	if (ver_string)
+		 major_version = atoi((const char *) ver_string);
+	else
+		major_version = 0;
+
+	P_SOIL_GLGETSTRINGIPROC soilGlGetStringi =
+		(P_SOIL_GLGETSTRINGIPROC) glXGetProcAddressARB((const GLubyte *) "glGetStringi");
+
+	if (major_version >= 3 && soilGlGetStringi) {
+		// OpenGL 3.0+
+		glGetIntegerv(GL_NUM_EXTENSIONS, &num_ext);
+		for (i = 0; i < num_ext; i++) {
+			ext_string = soilGlGetStringi(GL_EXTENSIONS, i);
+			if (ext_string && !strcmp((const char *) ext_string, cap)) {
+				return GL_TRUE;
+			}
+		}
+	}
+	else {
+		// OpenGL < 3.0
+		ext_string = glGetString(GL_EXTENSIONS);
+		if (ext_string && strstr((const char *) ext_string, cap)) {
+			return GL_TRUE;
+		}
+	}
+	return GL_FALSE;
+}
 unsigned int SOIL_direct_load_DDS(
 		const char *filename,
 		unsigned int reuse_texture_ID,
@@ -1725,7 +1772,7 @@ unsigned int SOIL_direct_load_DDS_from_memory(
 	/*	do this for each face of the cubemap!	*/
 	for( cf_target = ogl_target_start; cf_target <= ogl_target_end; ++cf_target )
 	{
-		if( buffer_index + DDS_full_size <= buffer_length )
+		if( buffer_index + DDS_full_size <= (unsigned int)buffer_length )
 		{
 			unsigned int byte_offset = DDS_main_size;
 			memcpy( (void*)DDS_data, (const void*)(&buffer[buffer_index]), DDS_full_size );
@@ -1735,7 +1782,7 @@ unsigned int SOIL_direct_load_DDS_from_memory(
 			{
 				/*	and remember, DXT uncompressed uses BGR(A),
 					so swap to RGB(A) for ALL MIPmap levels	*/
-				for( i = 0; i < DDS_full_size; i += block_size )
+				for( i = 0; i < (int)DDS_full_size; i += block_size )
 				{
 					unsigned char temp = DDS_data[i];
 					DDS_data[i] = DDS_data[i+2];
@@ -1872,29 +1919,25 @@ unsigned int SOIL_direct_load_DDS(
 	}
 	/*	now try to do the loading	*/
 	tex_ID = SOIL_direct_load_DDS_from_memory(
-		(const unsigned char *const)buffer, buffer_length,
+		(const unsigned char *const)buffer, (int)buffer_length,
 		reuse_texture_ID, flags, loading_as_cubemap );
 	SOIL_free_image_data( buffer );
 	return tex_ID;
 }
 
+// GL_ARB_texture_non_power_of_two is a core feature in OpenGL 2.0
 int query_NPOT_capability( void )
 {
 	/*	check for the capability	*/
 	if( has_NPOT_capability == SOIL_CAPABILITY_UNKNOWN )
 	{
 		/*	we haven't yet checked for the capability, do so	*/
-		if(
-			(NULL == strstr( (char const*)glGetString( GL_EXTENSIONS ),
-				"GL_ARB_texture_non_power_of_two" ) )
-		&&
-			(NULL == strstr( (char const*)glGetString( GL_EXTENSIONS ),
-				"GL_OES_texture_npot" ) )
-			)
+        if (!SOIL_internal_has_OGL_capability("GL_ARB_texture_non_power_of_two"))
 		{
 			/*	not there, flag the failure	*/
 			has_NPOT_capability = SOIL_CAPABILITY_NONE;
-		} else
+		}
+		else
 		{
 			/*	it's there!	*/
 			has_NPOT_capability = SOIL_CAPABILITY_PRESENT;
@@ -1904,26 +1947,21 @@ int query_NPOT_capability( void )
 	return has_NPOT_capability;
 }
 
+// GL_ARB_texture_rectangle is a core feature in OpenGL 3.1
 int query_tex_rectangle_capability( void )
 {
 	/*	check for the capability	*/
 	if( has_tex_rectangle_capability == SOIL_CAPABILITY_UNKNOWN )
 	{
 		/*	we haven't yet checked for the capability, do so	*/
-		if(
-			(NULL == strstr( (char const*)glGetString( GL_EXTENSIONS ),
-				"GL_ARB_texture_rectangle" ) )
-		&&
-			(NULL == strstr( (char const*)glGetString( GL_EXTENSIONS ),
-				"GL_EXT_texture_rectangle" ) )
-		&&
-			(NULL == strstr( (char const*)glGetString( GL_EXTENSIONS ),
-				"GL_NV_texture_rectangle" ) )
-			)
+		if (!SOIL_internal_has_OGL_capability("GL_ARB_texture_rectangle") &&
+		    !SOIL_internal_has_OGL_capability("GL_EXT_texture_rectangle") &&
+		    !SOIL_internal_has_OGL_capability("GL_NV_texture_rectangle"))
 		{
 			/*	not there, flag the failure	*/
 			has_tex_rectangle_capability = SOIL_CAPABILITY_NONE;
-		} else
+		}
+        else
 		{
 			/*	it's there!	*/
 			has_tex_rectangle_capability = SOIL_CAPABILITY_PRESENT;
@@ -1933,18 +1971,15 @@ int query_tex_rectangle_capability( void )
 	return has_tex_rectangle_capability;
 }
 
+// GL_ARB_texture_cube_map is a core feature in OpenGL 1.3
 int query_cubemap_capability( void )
 {
 	/*	check for the capability	*/
 	if( has_cubemap_capability == SOIL_CAPABILITY_UNKNOWN )
 	{
 		/*	we haven't yet checked for the capability, do so	*/
-		if(
-			(NULL == strstr( (char const*)glGetString( GL_EXTENSIONS ),
-				"GL_ARB_texture_cube_map" ) )
-		&&
-			(NULL == strstr( (char const*)glGetString( GL_EXTENSIONS ),
-				"GL_EXT_texture_cube_map" ) )
+		if (!SOIL_internal_has_OGL_capability("GL_ARB_texture_cube_map") &&
+		    !SOIL_internal_has_OGL_capability("GL_EXT_texture_cube_map")
 		#ifdef GL_ES_VERSION_2_0
 		&& (0) /* GL ES 2.0 supports cubemaps, always enable */
 		#endif
@@ -1952,7 +1987,8 @@ int query_cubemap_capability( void )
 		{
 			/*	not there, flag the failure	*/
 			has_cubemap_capability = SOIL_CAPABILITY_NONE;
-		} else
+		}
+        else
 		{
 			/*	it's there!	*/
 			has_cubemap_capability = SOIL_CAPABILITY_PRESENT;
@@ -1962,19 +1998,20 @@ int query_cubemap_capability( void )
 	return has_cubemap_capability;
 }
 
+// GL_EXT_texture_compression_s3tc does not appear to be a core feature in any
+// version of OpenGL up to 4.4
 int query_DXT_capability( void )
 {
 	/*	check for the capability	*/
 	if( has_DXT_capability == SOIL_CAPABILITY_UNKNOWN )
 	{
 		/*	we haven't yet checked for the capability, do so	*/
-		if( NULL == strstr(
-				(char const*)glGetString( GL_EXTENSIONS ),
-				"GL_EXT_texture_compression_s3tc" ) )
+		if (!SOIL_internal_has_OGL_capability("GL_EXT_texture_compression_s3tc"))
 		{
 			/*	not there, flag the failure	*/
 			has_DXT_capability = SOIL_CAPABILITY_NONE;
-		} else
+		}
+        else
 		{
 			/*	and find the address of the extension function	*/
 			P_SOIL_GLCOMPRESSEDTEXIMAGE2DPROC ext_addr = NULL;
