@@ -1,0 +1,40 @@
+name: Non regression tests for SOIL
+on:
+  workflow_dispatch:
+    branches:
+      - master
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+
+jobs:
+  compilation_linux:
+    name: Non regression tests on Linux
+    runs-on: ubuntu-20.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          submodules: true
+      - name: Install packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install libgl-dev
+      - name: Compile SOIL
+        run: |
+          make -j`nproc --all`
+
+  compilation_macos:
+    name: Non regression tests on MacOS X
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          submodules: true
+      - name: Compile SOIL
+        run: |
+          make -j`sysctl -n hw.logicalcpu`
